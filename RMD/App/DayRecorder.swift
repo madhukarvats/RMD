@@ -18,8 +18,12 @@ final class DayRecorder {
 
     private var store: TranscriptStore?
     private var transcriber: Transcriber?
+    private var loadingModel: Task<Transcriber, any Error>?
     private var mic: MicCapture?
     private var pipeline: Task<Void, Never>?
+    /// Bumped by every switch on or off, so a start that was waiting (for mic access or the
+    /// model) can tell it has been overtaken and must not start the mic.
+    private var generation = 0
 
     var isOn: Bool {
         switch state {
@@ -34,14 +38,18 @@ final class DayRecorder {
 
     private func start() async {
         guard !isOn else { return }
+        generation += 1
+        let attempt = generation
+        state = .preparing("Starting…")
+
         guard await Self.micAccessGranted() else {
-            state = .micDenied
+            if attempt == generation { state = .micDenied }
             return
         }
         do {
             let store = try openStore()
             let transcriber = try await loadTranscriber()
-            guard isOn else { return }  // switched off while the model was loading
+            guard attempt == generation else { return }  // switched off while the model was loading
 
             let mic = MicCapture()
             let audio = try mic.start()
@@ -51,11 +59,12 @@ final class DayRecorder {
                 await Self.run(audio: audio, transcriber: transcriber, store: store)
             }
         } catch {
-            state = .failed(error.localizedDescription)
+            if attempt == generation { state = .failed(error.localizedDescription) }
         }
     }
 
     private func stop() {
+        generation += 1
         // Finishing the audio stream lets the pipeline transcribe what it already heard, then end.
         mic?.stop()
         mic = nil
@@ -70,15 +79,21 @@ final class DayRecorder {
         return store
     }
 
+    /// Loads the model once. A switch off → on while it loads waits for the same load.
     private func loadTranscriber() async throws -> Transcriber {
         if let transcriber { return transcriber }
         state = .preparing("Loading speech model…")
-        let transcriber = try await WhisperKitTranscriber.load { fraction in
+        let progress: @Sendable (Double) -> Void = { fraction in
             Task { @MainActor [weak self] in
                 guard let self, case .preparing = self.state else { return }
                 self.state = .preparing("Downloading speech model… \(Int(fraction * 100))%")
             }
         }
+        let loading = loadingModel ?? Task { try await WhisperKitTranscriber.load(progress: progress) as Transcriber }
+        loadingModel = loading
+        defer { loadingModel = nil }  // after a failure, the next switch-on tries again
+
+        let transcriber = try await loading.value
         self.transcriber = transcriber
         return transcriber
     }

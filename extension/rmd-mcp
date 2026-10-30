@@ -1,0 +1,3 @@
+#!/bin/sh
+# The extension's entry point: runs the MCP server from the RMD build, so rebuilding RMD updates it too.
+exec "/Users/madhukarsharma/Desktop/workspace/ThinkingLab/RMD/build/Build/Products/Debug/RMD.app/Contents/MacOS/rmd-mcp" "$@"

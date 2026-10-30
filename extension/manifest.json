@@ -1,0 +1,26 @@
+{
+  "manifest_version": "0.3",
+  "name": "rmd",
+  "display_name": "RMD — Record My Day",
+  "version": "0.1.0",
+  "description": "Read the timestamped transcript of your day that RMD records on this Mac, and summarize it by time block or meeting.",
+  "author": { "name": "Madhukar Sharma" },
+  "server": {
+    "type": "binary",
+    "entry_point": "rmd-mcp",
+    "mcp_config": {
+      "command": "/Users/madhukarsharma/Desktop/workspace/ThinkingLab/RMD/build/Build/Products/Debug/RMD.app/Contents/MacOS/rmd-mcp",
+      "args": [],
+      "env": {}
+    }
+  },
+  "tools": [
+    { "name": "list_days", "description": "Days that have a transcript, with line counts and first/last times" },
+    { "name": "get_transcript", "description": "One day's transcript, optionally a from–to time window" },
+    { "name": "search_transcript", "description": "Lines matching words or a phrase, with date and time" },
+    { "name": "get_recent", "description": "Everything heard in the last N minutes" }
+  ],
+  "prompts_generated": true,
+  "keywords": ["transcript", "hinglish", "meetings", "summary"],
+  "compatibility": { "platforms": ["darwin"] }
+}

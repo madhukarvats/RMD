@@ -41,7 +41,12 @@ recording stays in the app. MCP clients launch it themselves, so the RMD app doe
 claude mcp add --scope user rmd -- /Users/madhukarsharma/Desktop/workspace/ThinkingLab/RMD/build/Build/Products/Debug/RMD.app/Contents/MacOS/rmd-mcp
 ```
 
-**Claude Desktop**: Settings → Developer → Edit Config, add this to `claude_desktop_config.json`, then restart Claude:
+**Claude Desktop**: install `extension/` as an extension. Settings → Extensions → Advanced settings →
+**Install unpacked extension** → pick the `extension` folder. Or run `make extension` and choose `build/RMD.mcpb`
+with **Install extension**. The extension runs the server from the RMD build, so rebuilding RMD updates it.
+
+Or, by hand, with Claude fully quit (a running Claude writes its own copy of the file back and drops your edit),
+add this to `~/Library/Application Support/Claude/claude_desktop_config.json`, then open Claude:
 
 ```json
 {
