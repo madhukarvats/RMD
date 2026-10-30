@@ -1,0 +1,60 @@
+name: RMD
+options:
+  bundleIdPrefix: com.madhukarsharma
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: YAPGGGF7QP
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Apple Development"
+    ENABLE_HARDENED_RUNTIME: YES
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+
+packages:
+  ArgmaxOSS:
+    url: https://github.com/argmaxinc/argmax-oss-swift
+    from: 1.1.1
+  MCP:
+    url: https://github.com/modelcontextprotocol/swift-sdk
+    from: 0.12.1
+
+targets:
+  RMD:
+    type: application
+    platform: macOS
+    sources: [RMD]
+    dependencies:
+      - package: ArgmaxOSS
+        product: WhisperKit
+      - target: rmd-mcp
+        copy:
+          destination: executables
+    info:
+      path: RMD/Info.plist
+      properties:
+        CFBundleDisplayName: RMD
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.productivity
+        NSMicrophoneUsageDescription: RMD listens to your microphone to write a text transcript of your day. Audio is never saved.
+        NSAudioCaptureUsageDescription: RMD listens to your computer's audio to write a text transcript of your day. Audio is never saved.
+    entitlements:
+      path: RMD/RMD.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.madhukarsharma.RMD
+
+  # MCP server that lets Claude (or any MCP client) read the transcript. Read-only.
+  rmd-mcp:
+    type: tool
+    platform: macOS
+    sources: [rmd-mcp, RMD/Storage]
+    dependencies:
+      - package: MCP
+        product: MCP
