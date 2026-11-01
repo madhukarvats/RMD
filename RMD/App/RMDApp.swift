@@ -19,10 +19,30 @@ struct RMDApp: App {
 }
 
 /// Owns the recorder so links can switch it too: `open rmd://on`, `rmd://off` or `rmd://toggle`.
-/// macOS hides menu bar icons that don't fit (behind the notch), so the icon isn't always there to click.
+/// macOS hides menu bar icons that don't fit (behind the notch), so the icon isn't always there to click:
+/// opening RMD again (Spotlight, Finder, `open RMD.app`) shows the same switch in a small window.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recorder = DayRecorder()
+    private var window: NSWindow?
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow()
+        return false
+    }
+
+    private func showWindow() {
+        if window == nil {
+            let window = NSWindow(contentViewController: NSHostingController(rootView: MenuView(recorder: recorder)))
+            window.title = "RMD"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            self.window = window
+        }
+        NSApp.activate()
+        window?.makeKeyAndOrderFront(nil)
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.scheme == "rmd" {

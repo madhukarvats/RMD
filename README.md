@@ -15,8 +15,9 @@ make clean
 
 `RMD.xcodeproj` is generated from `project.yml`; edit the YAML, not the project.
 
-Switch recording from anywhere with `open rmd://on`, `open rmd://off` or `open rmd://toggle`. Handy when the
-menu bar is full and macOS hides RMD's icon behind the notch.
+When the menu bar is full, macOS hides RMD's icon behind the notch. Open RMD again (Spotlight: ⌘Space, "RMD")
+to get the same switch in a small window, or switch recording with `open rmd://on`, `open rmd://off` or
+`open rmd://toggle`.
 
 Speech models live in `~/Library/Application Support/RMD/models` (see *Speech-to-text engine*); everything runs offline.
 Transcripts live in `~/Library/Application Support/RMD/rmd.sqlite`.
