@@ -1,14 +1,20 @@
+import AppKit
 import AVFoundation
 
 /// `RMD --transcribe <audio file>` runs a file through the same path as the mic
 /// (silence skipping → speech model) and prints timestamped lines. Nothing is saved.
 /// `RMD --compare <audio file>` does the same with every engine, printing their lines side by side.
 enum DevCommands {
-    static func runIfRequested() {
+    /// True while a command runs, so the app shows no window or Dock icon.
+    @MainActor static private(set) var isRunning = false
+
+    @MainActor static func runIfRequested() {
         let arguments = CommandLine.arguments
         guard let flag = arguments.firstIndex(where: { $0 == "--transcribe" || $0 == "--compare" }),
               flag + 1 < arguments.count
         else { return }
+        isRunning = true
+        NSApplication.shared.setActivationPolicy(.prohibited)
         let url = URL(filePath: arguments[flag + 1])
         let compare = arguments[flag] == "--compare"
         Task {

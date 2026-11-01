@@ -15,9 +15,11 @@ make clean
 
 `RMD.xcodeproj` is generated from `project.yml`; edit the YAML, not the project.
 
-When the menu bar is full, macOS hides RMD's icon behind the notch. Open RMD again (Spotlight: ⌘Space, "RMD")
-to get the same switch in a small window, or switch recording with `open rmd://on`, `open rmd://off` or
-`open rmd://toggle`.
+RMD lives only in the menu bar: its icon opens the switch and Quit. New menu bar icons normally land on the far
+left, which on a full menu bar is behind the notch, so RMD's starts near the right end, next to Control Center
+(⌘-drag it to move it). Opening RMD again from Spotlight opens the same menu, and `open rmd://on`,
+`open rmd://off` or `open rmd://toggle` switch recording from Terminal. Run with `RMD_DEBUG=1` to print where
+the icon is and whether it's visible. Finder's app icon is drawn by `swift tools/make-icon.swift`.
 
 Speech models live in `~/Library/Application Support/RMD/models` (see *Speech-to-text engine*); everything runs offline.
 Transcripts live in `~/Library/Application Support/RMD/rmd.sqlite`.
