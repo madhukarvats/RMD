@@ -14,8 +14,15 @@ enum TranscriptTools {
         and the words: "Me" is the user's microphone; "Others" is audio playing on the computer (calls, videos). \
         The user speaks English, Hindi and Hinglish; Hindi is written in Roman letters (e.g. "kya tum hindi bol sakte ho"). \
         Transcription is automatic, so expect some misheard words. Times are local to the user's Mac (\(TimeZone.current.identifier)). \
-        Gaps between lines mean nobody spoke or RMD was off. When summarizing, anchor every point to times from the transcript.
+        Gaps between lines mean nobody spoke or RMD was off. When summarizing, anchor every point to times from the transcript.\(vocabularyNote.map { " " + $0 } ?? "")
         """
+    }
+
+    /// The user's names and jargon, so Claude can read "only" as Olly or "paaloo" as Parul.
+    private static var vocabularyNote: String? {
+        let words = Vocabulary.load()
+        guard !words.isEmpty else { return nil }
+        return "Names and words the user says often (a misheard one may appear as a similar-sounding word): \(words.joined(separator: ", "))."
     }
 
     private static let maxLines = 3000
@@ -122,6 +129,7 @@ enum TranscriptTools {
     private static func render(_ lines: [TranscriptLine], heading: String) -> String {
         var output = ["\(heading) (times in \(TimeZone.current.identifier))"]
         guard !lines.isEmpty else { return output[0] + "\nNo speech was recorded in this period." }
+        if let vocabularyNote { output.append(vocabularyNote) }
 
         var previousEnd: Date?
         for line in lines.prefix(maxLines) {

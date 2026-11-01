@@ -46,17 +46,21 @@ final class DayRecorder {
             if attempt == generation { state = .micDenied }
             return
         }
+        guard attempt == generation else { return }  // switched off while asking for the mic
         do {
             let store = try openStore()
+            Vocabulary.createIfMissing()
             let transcriber = try await loadTranscriber()
             guard attempt == generation else { return }  // switched off while the model was loading
+            let comparison = try await loadComparison(main: transcriber)
+            guard attempt == generation else { return }
 
             let mic = MicCapture()
             let audio = try mic.start()
             self.mic = mic
             state = .on(since: .now)
             pipeline = Task.detached {
-                await Self.run(audio: audio, transcriber: transcriber, store: store)
+                await Self.run(audio: audio, transcriber: transcriber, comparison: comparison, store: store)
             }
         } catch {
             if attempt == generation { state = .failed(error.localizedDescription) }
@@ -83,8 +87,8 @@ final class DayRecorder {
     private func loadTranscriber() async throws -> Transcriber {
         if let transcriber { return transcriber }
         state = .preparing("Loading speech model…")
-        let progress: @Sendable (Double) -> Void = { fraction in
-            Task { @MainActor [weak self] in
+        let progress: @Sendable (Double) -> Void = { [weak self] fraction in
+            Task { @MainActor in
                 guard let self, case .preparing = self.state else { return }
                 self.state = .preparing("Downloading speech model… \(Int(fraction * 100))%")
             }
@@ -98,9 +102,19 @@ final class DayRecorder {
         return transcriber
     }
 
+    /// Compare mode, for choosing a speech engine: `defaults write com.madhukarsharma.RMD compareEngines -bool YES`,
+    /// then switch RMD off and on. Every line is also run through Apple's dictation and all versions are logged
+    /// side by side in engine-comparison.jsonl (text only). The transcript itself still comes from the main engine.
+    private func loadComparison(main: Transcriber) async throws -> EngineComparison? {
+        guard UserDefaults.standard.bool(forKey: "compareEngines") else { return nil }
+        state = .preparing("Loading engines to compare…")
+        return await EngineComparison.load(main: main, log: try ComparisonLog())
+    }
+
     private nonisolated static func run(
         audio: AsyncStream<AudioChunk>,
         transcriber: Transcriber,
+        comparison: EngineComparison?,
         store: TranscriptStore
     ) async {
         // Segmenting never waits on the model, so a slow transcription can't drop audio.
@@ -116,7 +130,12 @@ final class DayRecorder {
 
         for await utterance in utterances {
             do {
-                guard let transcript = try await transcriber.transcribe(utterance.samples) else { continue }
+                let heard = if let comparison {
+                    try await comparison.transcribeAndLog(utterance)
+                } else {
+                    try await transcriber.transcribe(utterance.samples)
+                }
+                guard let transcript = heard else { continue }
                 _ = try await store.insert(TranscriptLine(
                     start: utterance.start,
                     end: utterance.end,

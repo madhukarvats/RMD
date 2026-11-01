@@ -9,13 +9,23 @@ Requires macOS 26, Xcode 26+, and [XcodeGen](https://github.com/yonaskolb/XcodeG
 ```bash
 make run     # generate project, build, launch (menu bar icon: waveform circle)
 make build   # build only
+make test    # transcript text checks and speech-cutting tests
 make clean
 ```
 
 `RMD.xcodeproj` is generated from `project.yml`; edit the YAML, not the project.
 
+Switch recording from anywhere with `open rmd://on`, `open rmd://off` or `open rmd://toggle`. Handy when the
+menu bar is full and macOS hides RMD's icon behind the notch.
+
 Speech models live in `~/Library/Application Support/RMD/models` (see *Speech-to-text engine*); everything runs offline.
 Transcripts live in `~/Library/Application Support/RMD/rmd.sqlite`.
+
+### Names list
+
+`~/Library/Application Support/RMD/vocabulary.txt` holds names and words you say often (people, products,
+jargon), one per line. The speech model gets them as a hint, so it writes "Parul" rather than "Parool", and the
+MCP server hands them to Claude, so it can read "only" as Olly. Edits count from the next line RMD hears.
 
 ### Testing without talking
 
@@ -23,12 +33,27 @@ Transcripts live in `~/Library/Application Support/RMD/rmd.sqlite`.
 # Run an audio file through the same pipeline as the mic and print timestamped lines (nothing saved)
 build/Build/Products/Debug/RMD.app/Contents/MacOS/RMD --transcribe some-clip.m4a
 
+# Same, through every engine side by side: Apex, and Apple dictation in Indian English and in Hindi
+build/Build/Products/Debug/RMD.app/Contents/MacOS/RMD --compare some-clip.m4a
+
 # Compare candidate speech models side by side on your own voice clips (put them in samples/, which git ignores)
 uv run tools/model-test/compare.py samples/*.m4a
 ```
 
 Debug knobs for `--transcribe`: `RMD_DEBUG=1` prints each Whisper segment with its confidence scores;
 `RMD_LANGUAGE=hi|en` forces a language instead of auto-detecting (`en` on Hindi speech translates to English).
+
+### Comparing engines on your own voice
+
+Compare mode runs every line through Apex and through Apple's on-device dictation (Indian English, which writes
+Hinglish in Roman letters, and Hindi, which writes Devanagari), and writes all versions side by side to
+`~/Library/Application Support/RMD/engine-comparison.jsonl`. Text only, never audio. The transcript itself
+still comes from Apex. macOS downloads Apple's Hindi model the first time.
+
+```bash
+defaults write com.madhukarsharma.RMD compareEngines -bool YES   # then switch RMD off and on
+defaults delete com.madhukarsharma.RMD compareEngines            # back to normal
+```
 
 ## Connect to Claude (MCP)
 
@@ -93,6 +118,13 @@ as its model card says. English stays English. About 1 s per line; loads in ~2 s
 
 Stock Whisper turbo (Hindi in Devanagari) is the fallback if the converted model is missing.
 Apple's on-device LLM can't romanize afterwards: it rejects Hindi input.
+On a test with the user's own voice (Nov 2026), Apex got 71% of words right against 44% for Apple's
+on-device dictation in Indian English and 18% in Hindi, so Apple's engines are only kept for comparisons.
+
+Speech reaches the model in lines cut at pauses. With no pause for 25 s (often other people talking nearby),
+RMD cuts in the quietest moment of the last 15 s and carries the rest into the next line, so nothing is cut
+mid-word or lost. Whisper's repeat loops ("30 6. 30 6. 30 6…") are trimmed to one, and its "nan" for
+unreadable audio is dropped.
 
 **Re-creating the converted model** (1.5 GB, ~15 min on an M4, then ~4 min one-time Neural Engine setup on first load):
 

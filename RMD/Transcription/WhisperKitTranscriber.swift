@@ -71,7 +71,7 @@ actor WhisperKitTranscriber: Transcriber {
     }
 
     func transcribe(_ samples: [Float]) async throws -> Transcript? {
-        let options = DecodingOptions(
+        var options = DecodingOptions(
             task: .transcribe,
             language: language,
             temperatureFallbackCount: 2,
@@ -82,6 +82,14 @@ actor WhisperKitTranscriber: Transcriber {
             // token, which is common for Hindi and Hinglish, and returns empty text.
             firstTokenLogProbThreshold: nil
         )
+        // The user's names and jargon as Whisper's "previous text", which nudges it toward those spellings.
+        let vocabulary = Vocabulary.load()
+        if !vocabulary.isEmpty, let tokenizer = whisper.tokenizer {
+            options.promptTokens = Array(tokenizer.encode(text: " " + vocabulary.joined(separator: ", ") + ".")
+                .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+                .prefix(Self.maxPromptTokens))
+            options.usePrefillPrompt = true
+        }
         let results = try await whisper.transcribe(audioArray: samples, decodeOptions: options)
         if Self.debug {
             for segment in results.flatMap(\.segments) {
@@ -91,26 +99,20 @@ actor WhisperKitTranscriber: Transcriber {
             }
         }
         let segments = results.flatMap(\.segments).filter { !Self.isSilence($0) }
-        let text = segments.map(\.text).joined(separator: " ")
+        let text = TranscriptCleanup.collapsingRepeats(segments.map(\.text).joined(separator: " "))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !Self.isKnownHallucination(text) else { return nil }
+        guard !text.isEmpty,
+              !TranscriptCleanup.isKnownHallucination(text),
+              !TranscriptCleanup.isOnlyVocabulary(text, vocabulary)
+        else { return nil }
         // A forced language says nothing about what was actually spoken, so only keep detected ones.
         return Transcript(text: text, language: language == nil ? results.first?.language : nil)
     }
 
+    /// Whisper's prompt holds at most 224 tokens; a long list is cut rather than crowding out the speech.
+    private static let maxPromptTokens = 150
+
     private static func isSilence(_ segment: TranscriptionSegment) -> Bool {
         segment.noSpeechProb > 0.6 && segment.avgLogprob < -1
     }
-
-    /// Phrases Whisper is known to invent from background noise.
-    private static func isKnownHallucination(_ text: String) -> Bool {
-        let normalized = text.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
-        return hallucinations.contains(normalized)
-    }
-
-    private static let hallucinations: Set<String> = [
-        "thank you", "thanks for watching", "thank you for watching", "please subscribe",
-        "subtitles by the amara.org community", "you",
-        "धन्यवाद", "शुक्रिया",
-    ]
 }

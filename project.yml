@@ -40,8 +40,12 @@ targets:
         CFBundleDisplayName: RMD
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.productivity
+        CFBundleURLTypes:
+          - CFBundleURLName: com.madhukarsharma.RMD
+            CFBundleURLSchemes: [rmd]
         NSMicrophoneUsageDescription: RMD listens to your microphone to write a text transcript of your day. Audio is never saved.
         NSAudioCaptureUsageDescription: RMD listens to your computer's audio to write a text transcript of your day. Audio is never saved.
+        NSSpeechRecognitionUsageDescription: RMD can use Apple's on-device speech recognition to write your transcript. Audio is never saved.
     entitlements:
       path: RMD/RMD.entitlements
       properties:
