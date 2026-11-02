@@ -213,17 +213,55 @@ final class DayRecorder {
                     try await transcriber.transcribe(item.utterance.samples)
                 }
                 guard let transcript = text else { continue }
-                _ = try await store.insert(TranscriptLine(
+                try await save(TranscriptLine(
                     start: item.utterance.start,
                     end: item.utterance.end,
                     source: item.source,
                     text: transcript.text,
                     language: transcript.language
-                ))
+                ), in: store)
             } catch {
                 print("RMD: dropped an utterance: \(error)")
             }
         }
+    }
+
+    /// How far apart a "Me" and an "Others" line can be and still hold the same speech: the two sources
+    /// cut their lines at slightly different moments.
+    private nonisolated static let echoWindow: TimeInterval = 2
+
+    /// Saves a line without the call audio the mic picked up from the speakers (see EchoFilter).
+    /// Either side's line can be ready first, so a "Me" line is checked against the "Others" lines already
+    /// saved, and each new "Others" line checks the "Me" lines saved before it again.
+    private nonisolated static func save(_ line: TranscriptLine, in store: TranscriptStore) async throws {
+        switch line.source {
+        case .me:
+            guard let text = try await withoutEcho(line, store) else { return }
+            _ = try await store.insert(TranscriptLine(start: line.start, end: line.end, source: .me, text: text, language: line.language))
+        case .others:
+            _ = try await store.insert(line)
+            let mineAround = try await store.lines(
+                from: .me,
+                overlapping: line.start.addingTimeInterval(-echoWindow),
+                to: line.end.addingTimeInterval(echoWindow)
+            )
+            for mine in mineAround {
+                switch try await withoutEcho(mine, store) {
+                case nil: try await store.delete(mine.id)
+                case let text? where text != mine.text: try await store.setText(text, of: mine.id)
+                default: break
+                }
+            }
+        }
+    }
+
+    private nonisolated static func withoutEcho(_ mine: TranscriptLine, _ store: TranscriptStore) async throws -> String? {
+        let heard = try await store.lines(
+            from: .others,
+            overlapping: mine.start.addingTimeInterval(-echoWindow),
+            to: mine.end.addingTimeInterval(echoWindow)
+        )
+        return EchoFilter.removingEcho(from: mine.text, heard: heard.map(\.text))
     }
 
     private static func micAccessGranted() async -> Bool {

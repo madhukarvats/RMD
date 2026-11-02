@@ -31,8 +31,12 @@ for Google Meet), RMD records the call: your voice from the mic as "Me", and the
 audio as "Others", taken before it reaches the speaker or AirPods. If RMD was off, it switches on for the
 call and off again 10 s after it ends; switching it off during a call is respected until the call ends.
 macOS asks once to allow "System Audio Recording". Mic and speaker changes (AirPods connecting) are followed
-without stopping. On laptop speakers the mic also hears the other people, so their words can turn up in
-"Me" lines too; headphones avoid that.
+without stopping.
+
+On laptop speakers the mic also hears the other people, so their words reach the transcript twice: cleanly as
+"Others" and, a little garbled, as "Me". RMD removes that echo as it saves: a "Me" sentence is dropped when most
+of its words line up with what "Others" said within 2 s of it, so "Me" keeps only what you said, replies
+included. A sentence where you repeat the other person's words back can go with it; headphones avoid all of this.
 
 ### Names list
 
@@ -159,7 +163,7 @@ unreadable audio is dropped.
 - [x] 1. Setup — menu bar app shell, mic permission, signing, project
 - [x] 2. Mic → live transcript with timestamps, Hindi in Roman letters (Oriserve Apex on the Neural Engine)
 - [x] 3. Calls: detected automatically, other side recorded from the Mac's audio (process tap) as "Others",
-  mic and speaker changes followed. Still to do: echo when on laptop speakers, computer audio outside calls
+  mic and speaker changes followed, speaker echo removed from "Me". Still to do: computer audio outside calls
 - [x] 4. MCP server (`rmd-mcp`): transcript tools + summary prompts
 - [ ] 5. Meeting summaries (30-min, meeting, daily), Markdown export
 - [ ] 6. Polish — live transcript window, timeline, pause hotkey, launch at login

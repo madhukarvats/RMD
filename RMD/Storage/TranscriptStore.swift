@@ -78,6 +78,37 @@ actor TranscriptStore {
         return readLines(statement)
     }
 
+    /// Lines from one source that overlap `[from, to]`, oldest first. No line is longer than about 25 s,
+    /// so only lines that started in the minute before `from` can reach into the window.
+    func lines(from source: TranscriptLine.Source, overlapping from: Date, to: Date) throws -> [TranscriptLine] {
+        let sql = """
+            SELECT \(Self.columns()) FROM segments
+            WHERE source = ? AND started_at >= ? AND started_at < ? AND ended_at > ? ORDER BY started_at
+            """
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, source.rawValue, -1, sqliteTransient)
+        sqlite3_bind_double(statement, 2, from.timeIntervalSince1970 - 60)
+        sqlite3_bind_double(statement, 3, to.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 4, from.timeIntervalSince1970)
+        return readLines(statement)
+    }
+
+    func setText(_ text: String, of id: Int64) throws {
+        let statement = try prepare("UPDATE segments SET text = ? WHERE id = ?")
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_text(statement, 1, text, -1, sqliteTransient)
+        sqlite3_bind_int64(statement, 2, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw error() }
+    }
+
+    func delete(_ id: Int64) throws {
+        let statement = try prepare("DELETE FROM segments WHERE id = ?")
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_int64(statement, 1, id)
+        guard sqlite3_step(statement) == SQLITE_DONE else { throw error() }
+    }
+
     /// Full-text search (every word must appear), falling back to a plain substring match
     /// so partial words and odd spellings still hit. Newest first.
     func search(_ query: String, since: Date, limit: Int) throws -> [TranscriptLine] {
