@@ -11,7 +11,8 @@ enum TranscriptTools {
         """
         RMD (Record My Day) keeps a timestamped text transcript of the user's day, captured on their Mac \
         while RMD is switched on. Audio is never stored, only text. Each line has a time, a speaker source \
-        and the words: "Me" is the user's microphone; "Others" is audio playing on the computer (calls, videos). \
+        and the words: "Me" is the user's microphone; "Others" is the other people on a call, taken from the Mac's audio \
+        (RMD records calls in Zoom, Meet, Teams, Slack, WhatsApp and FaceTime automatically). \
         The user speaks English, Hindi and Hinglish; Hindi is written in Roman letters (e.g. "kya tum hindi bol sakte ho"). \
         Transcription is automatic, so expect some misheard words. Times are local to the user's Mac (\(TimeZone.current.identifier)). \
         Gaps between lines mean nobody spoke or RMD was off. When summarizing, anchor every point to times from the transcript.\(vocabularyNote.map { " " + $0 } ?? "")

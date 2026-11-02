@@ -19,12 +19,16 @@ struct RMDApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recorder = DayRecorder()
+    private let calls = CallWatcher()
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !DevCommands.isRunning else { return }
         addMenuBarIcon()
+        calls.start { [recorder] app in
+            Task { await recorder.callChanged(to: app) }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

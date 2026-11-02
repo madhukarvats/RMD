@@ -17,7 +17,7 @@ run: build
 test:
 	mkdir -p build/tests
 	swiftc -O -swift-version 6 RMD/Transcription/TranscriptCleanup.swift tests/cleanup/main.swift -o build/tests/cleanup
-	swiftc -O -swift-version 6 RMD/Audio/SpeechSegmenter.swift RMD/Audio/MicCapture.swift tests/segmenter/main.swift -o build/tests/segmenter
+	swiftc -O -swift-version 6 RMD/Audio/SpeechSegmenter.swift RMD/Audio/MicCapture.swift RMD/Audio/AudioDevices.swift tests/segmenter/main.swift -o build/tests/segmenter
 	build/tests/cleanup
 	build/tests/segmenter
 

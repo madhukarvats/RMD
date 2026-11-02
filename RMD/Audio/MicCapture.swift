@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 
 /// A slice of 16 kHz mono audio and the wall-clock time its first sample was heard.
 struct AudioChunk: Sendable {
@@ -7,18 +8,71 @@ struct AudioChunk: Sendable {
 }
 
 /// Streams the default microphone as 16 kHz mono chunks. Nothing is written to disk.
+/// When the microphone changes (AirPods connect, a call app switches devices) macOS stops the audio
+/// engine, so a fresh one is started on the new microphone and the stream carries on.
+@MainActor
 final class MicCapture {
-    static let sampleRate = 16_000.0
+    struct NoMicrophone: Error {}
 
-    private let engine = AVAudioEngine()
+    nonisolated static let sampleRate = 16_000.0
+
+    private var engine: AVAudioEngine?
+    private var engineChanged: NSObjectProtocol?
+    private var stopWatchingDevice: (() -> Void)?
     private var continuation: AsyncStream<AudioChunk>.Continuation?
+    private var restartAttempts = 0
 
     func start() throws -> AsyncStream<AudioChunk> {
-        let input = engine.inputNode
-        let inputFormat = input.outputFormat(forBus: 0)
-        let resampler = try Resampler(from: inputFormat, toRate: Self.sampleRate)
         let (stream, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
         self.continuation = continuation
+        do {
+            try startEngine()
+        } catch {
+            continuation.finish()
+            self.continuation = nil
+            throw error
+        }
+        stopWatchingDevice = AudioDevices.onDefaultDeviceChange(kAudioHardwarePropertyDefaultInputDevice) { [weak self] in
+            self?.restart()
+        }
+        return stream
+    }
+
+    func stop() {
+        stopWatchingDevice?()
+        stopWatchingDevice = nil
+        stopEngine()
+        continuation?.finish()
+        continuation = nil
+    }
+
+    private func restart() {
+        guard continuation != nil else { return }
+        stopEngine()
+        do {
+            try startEngine()
+            restartAttempts = 0
+        } catch {
+            // A device that just connected can take a moment to be ready.
+            restartAttempts += 1
+            guard restartAttempts <= 5 else {
+                print("RMD: the microphone didn't come back: \(error)")
+                return
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(1))
+                restart()
+            }
+        }
+    }
+
+    private func startEngine() throws {
+        guard let continuation else { return }
+        let engine = AVAudioEngine()
+        let input = engine.inputNode
+        let inputFormat = input.outputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0 else { throw NoMicrophone() }
+        let resampler = try Resampler(from: inputFormat, toRate: Self.sampleRate)
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { @Sendable buffer, _ in
             let heardAt = Date.now.addingTimeInterval(-Double(buffer.frameLength) / inputFormat.sampleRate)
@@ -30,17 +84,20 @@ final class MicCapture {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
-            continuation.finish()
             throw error
         }
-        return stream
+        engineChanged = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restart() }
+        }
+        self.engine = engine
     }
 
-    func stop() {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        continuation?.finish()
-        continuation = nil
+    private func stopEngine() {
+        if let engineChanged { NotificationCenter.default.removeObserver(engineChanged) }
+        engineChanged = nil
+        engine?.inputNode.removeTap(onBus: 0)
+        engine?.stop()
+        engine = nil
     }
 }
 

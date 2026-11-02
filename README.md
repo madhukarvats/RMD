@@ -24,6 +24,16 @@ the icon is and whether it's visible. Finder's app icon is drawn by `swift tools
 Speech models live in `~/Library/Application Support/RMD/models` (see *Speech-to-text engine*); everything runs offline.
 Transcripts live in `~/Library/Application Support/RMD/rmd.sqlite`.
 
+### Calls
+
+When a call app uses the microphone (Zoom, Teams, Slack, WhatsApp, FaceTime, Webex, Discord, or a browser
+for Google Meet), RMD records the call: your voice from the mic as "Me", and the other people from the Mac's
+audio as "Others", taken before it reaches the speaker or AirPods. If RMD was off, it switches on for the
+call and off again 10 s after it ends; switching it off during a call is respected until the call ends.
+macOS asks once to allow "System Audio Recording". Mic and speaker changes (AirPods connecting) are followed
+without stopping. On laptop speakers the mic also hears the other people, so their words can turn up in
+"Me" lines too; headphones avoid that.
+
 ### Names list
 
 `~/Library/Application Support/RMD/vocabulary.txt` holds names and words you say often (people, products,
@@ -148,14 +158,14 @@ unreadable audio is dropped.
 
 - [x] 1. Setup — menu bar app shell, mic permission, signing, project
 - [x] 2. Mic → live transcript with timestamps, Hindi in Roman letters (Oriserve Apex on the Neural Engine)
-- [ ] 3. Computer audio via process tap, app exclude list, echo handling
+- [x] 3. Calls: detected automatically, other side recorded from the Mac's audio (process tap) as "Others",
+  mic and speaker changes followed. Still to do: echo when on laptop speakers, computer audio outside calls
 - [x] 4. MCP server (`rmd-mcp`): transcript tools + summary prompts
-- [ ] 5. Meeting detection and summaries (30-min, meeting, daily), Markdown export
+- [ ] 5. Meeting summaries (30-min, meeting, daily), Markdown export
 - [ ] 6. Polish — live transcript window, timeline, pause hotkey, launch at login
 
 ## Defaults
 
-- Music apps (Spotify, Apple Music) excluded from computer audio
-- Pauses when the Mac locks or sleeps
+- Computer audio is only recorded during calls, so music and videos stay out of the transcript
+- Calls are recorded even when RMD is switched off; switching it off during a call stops that
 - Transcripts kept forever, stored only on this Mac
-- Echo cancellation on the mic when using speakers
