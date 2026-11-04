@@ -4,6 +4,8 @@ import SwiftUI
 /// Just the switch. The transcript itself is read through Claude via the MCP server.
 struct MenuView: View {
     let recorder: DayRecorder
+    /// Starts a fresh copy of RMD (recording again if the argument is true) and quits this one.
+    let restart: (Bool) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -44,6 +46,9 @@ struct MenuView: View {
             .buttonStyle(.link)
         case .failed(let message):
             Text(message).foregroundStyle(.red)
+        case .micStuck(let resume):
+            Button("Microphone stuck in macOS — Restart RMD") { restart(resume) }
+                .buttonStyle(.link)
         }
     }
 }

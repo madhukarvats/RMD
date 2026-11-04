@@ -17,6 +17,7 @@ check(TranscriptCleanup.collapsingRepeats("") == "", "empty text")
 print("Dropped lines")
 check(TranscriptCleanup.isKnownHallucination("nan"), "\"nan\" dropped")
 check(TranscriptCleanup.isKnownHallucination(" Nan. "), "\" Nan. \" dropped")
+check(TranscriptCleanup.isKnownHallucination("........................"), "a line of dots dropped")
 check(!TranscriptCleanup.isKnownHallucination("nanu ka ghar"), "\"nanu ka ghar\" kept")
 let names = ["Olly", "Parul", "Vipul", "Alana", "MCP", "GitHub"]
 check(TranscriptCleanup.isOnlyVocabulary("Olly, Parul, Vipul.", names), "a line that is just the names list is dropped")

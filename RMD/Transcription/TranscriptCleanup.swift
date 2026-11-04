@@ -33,9 +33,11 @@ enum TranscriptCleanup {
         return kept.joined(separator: " ")
     }
 
-    /// Phrases models invent from background noise. Apex writes a bare "nan" for audio it can't make out.
+    /// Phrases models invent from background noise. Apex writes a bare "nan" for audio it can't make out,
+    /// or a line of just dots ("........").
     static func isKnownHallucination(_ text: String) -> Bool {
-        hallucinations.contains(text.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespaces)))
+        !text.contains { $0.isLetter || $0.isNumber }
+            || hallucinations.contains(text.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespaces)))
     }
 
     /// With names given as a hint, Whisper sometimes "hears" just the list in background noise.

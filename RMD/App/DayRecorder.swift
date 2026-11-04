@@ -16,6 +16,9 @@ final class DayRecorder {
         case on(since: Date)
         case micDenied
         case failed(String)
+        /// macOS's audio engine stopped answering while starting the microphone (see MicCapture). Only a
+        /// restart of RMD gets it back; `resume` says whether to record again afterwards.
+        case micStuck(resume: Bool)
     }
 
     private struct Heard: Sendable {
@@ -97,7 +100,12 @@ final class DayRecorder {
             guard attempt == generation else { return }
 
             let mic = MicCapture()
-            let audio = try mic.start()
+            mic.onStuck = { [weak self] in self?.micStuck() }
+            let audio = try await mic.start()
+            guard attempt == generation else {  // switched off while the mic started
+                mic.stop()
+                return
+            }
             let (heardStream, heard) = AsyncStream.makeStream(of: Heard.self)
             self.mic = mic
             self.heard = heard
@@ -107,9 +115,20 @@ final class DayRecorder {
             }
             state = .on(since: .now)
             if inCall { startComputerAudio() }
+        } catch is MicCapture.Stuck {
+            if attempt == generation { micStuck() }
         } catch {
             if attempt == generation { state = .failed(error.localizedDescription) }
         }
+    }
+
+    /// Stops recording and waits for the user to restart RMD from the menu (the icon turns yellow).
+    /// A call ending doesn't switch this off, so it can't go unnoticed.
+    private func micStuck() {
+        let resume = !startedForCall
+        stop()
+        startedForCall = false
+        state = .micStuck(resume: resume)
     }
 
     private func stop() {

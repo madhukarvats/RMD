@@ -14,8 +14,10 @@ struct RMDApp: App {
     }
 }
 
-/// RMD lives only in the menu bar: its icon opens the switch and Quit. Opening the app again (Spotlight,
-/// Finder) opens the same menu. Links switch recording too: `open rmd://on`, `rmd://off` or `rmd://toggle`.
+/// RMD lives only in the menu bar: its icon opens the switch and Quit. The icon is green while recording,
+/// yellow when RMD needs you (the microphone is stuck, or it couldn't start) and plain the rest of the time.
+/// Opening the app again (Spotlight, Finder) opens the same menu. Links switch recording too:
+/// `open rmd://on`, `rmd://off` or `rmd://toggle`.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recorder = DayRecorder()
@@ -28,6 +30,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         addMenuBarIcon()
         calls.start { [recorder] app in
             Task { await recorder.callChanged(to: app) }
+        }
+        if CommandLine.arguments.contains(Self.resumeRecording) {
+            Task { await recorder.setOn(true) }
         }
     }
 
@@ -43,14 +48,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.register(defaults: ["NSStatusItem Preferred Position RMD": 320])
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.autosaveName = "RMD"
-        let icon = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "RMD")
-        icon?.isTemplate = true
-        item.button?.image = icon
         item.button?.target = self
         item.button?.action = #selector(toggleMenu)
-        popover.contentViewController = NSHostingController(rootView: MenuView(recorder: recorder))
+        popover.contentViewController = NSHostingController(rootView: MenuView(recorder: recorder) { [weak self] resume in
+            self?.restart(recording: resume)
+        })
         popover.behavior = .transient
         statusItem = item
+        updateIcon()
 
         if ProcessInfo.processInfo.environment["RMD_DEBUG"] != nil {
             Task {
@@ -61,6 +66,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    /// Redraws the icon now and again whenever the recorder's state changes.
+    private func updateIcon() {
+        withObservationTracking {
+            statusItem?.button?.image = Self.icon(for: recorder.state)
+            if ProcessInfo.processInfo.environment["RMD_DEBUG"] != nil {
+                FileHandle.standardError.write(Data("icon for \(recorder.state)\n".utf8))
+            }
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.updateIcon() }
+        }
+    }
+
+    private static func icon(for state: DayRecorder.State) -> NSImage? {
+        let icon = NSImage(systemSymbolName: "waveform.circle", accessibilityDescription: "RMD")
+        let color: NSColor? = switch state {
+        case .on: .systemGreen
+        case .micStuck, .failed, .micDenied: .systemYellow
+        case .off, .preparing: nil
+        }
+        guard let color else {
+            icon?.isTemplate = true  // drawn in the menu bar's own colour
+            return icon
+        }
+        let colored = icon?.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [color]))
+        colored?.isTemplate = false
+        return colored
+    }
+
+    /// Starts a fresh copy of RMD and quits this one: after macOS's audio engine gets stuck in a process,
+    /// only a new one gets the microphone back. `recording` switches the new copy on.
+    private func restart(recording: Bool) {
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.createsNewApplicationInstance = true
+        configuration.arguments = recording ? [Self.resumeRecording] : []
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: configuration) { _, error in
+            if let error {
+                print("RMD: couldn't start a new copy: \(error)")
+            } else {
+                exit(0)
+            }
+        }
+    }
+
+    private static let resumeRecording = "--resume-recording"
 
     @objc private func toggleMenu() {
         if popover.isShown {
