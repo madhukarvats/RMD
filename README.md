@@ -22,8 +22,17 @@ only a fresh copy of RMD gets the mic back, so the menu offers **Restart RMD** (
 New menu bar icons normally land on the far
 left, which on a full menu bar is behind the notch, so RMD's starts near the right end, next to Control Center
 (⌘-drag it to move it). Opening RMD again from Spotlight opens the same menu, and `open rmd://on`,
-`open rmd://off` or `open rmd://toggle` switch recording from Terminal. Run with `RMD_DEBUG=1` to print where
+`open rmd://off` or `open rmd://toggle` switch recording from Terminal.
+
+**Double-tap Fn (🌐)** in any app to switch recording on or off. Holding Fn, or Fn with another key, doesn't
+count. It needs Input Monitoring: macOS asks once, and the switch is in System Settings → Privacy & Security →
+Input Monitoring. RMD only watches modifier keys going up and down, never what you type. Wispr Flow uses Fn for
+push-to-talk, so if you run both, give one of them another key. Run with `RMD_DEBUG=1` to print where
 the icon is and whether it's visible. Finder's app icon is drawn by `swift tools/make-icon.swift`.
+
+RMD adds itself to Login Items the first time it runs, so it's there to catch calls after a restart; it opens
+switched off. Remove it in System Settings → General → Login Items and it stays removed. The login item points
+at this build folder, so after `make clean` run `make run` again.
 
 Speech models live in `~/Library/Application Support/RMD/models` (see *Speech-to-text engine*); everything runs offline.
 Transcripts live in `~/Library/Application Support/RMD/rmd.sqlite`.
@@ -170,7 +179,7 @@ unreadable audio is dropped.
   mic and speaker changes followed, speaker echo removed from "Me". Still to do: computer audio outside calls
 - [x] 4. MCP server (`rmd-mcp`): transcript tools + summary prompts
 - [ ] 5. Meeting summaries (30-min, meeting, daily), Markdown export
-- [ ] 6. Polish — live transcript window, timeline, pause hotkey, launch at login
+- [ ] 6. Polish — live transcript window, timeline (launch at login and the Fn shortcut are done)
 
 ## Defaults
 

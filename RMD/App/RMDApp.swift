@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 
 @main
@@ -17,22 +18,45 @@ struct RMDApp: App {
 /// RMD lives only in the menu bar: its icon opens the switch and Quit. The icon is green while recording,
 /// yellow when RMD needs you (the microphone is stuck, or it couldn't start) and plain the rest of the time.
 /// Opening the app again (Spotlight, Finder) opens the same menu. Links switch recording too:
-/// `open rmd://on`, `rmd://off` or `rmd://toggle`.
+/// `open rmd://on`, `rmd://off` or `rmd://toggle`, and so does double-tapping Fn. RMD opens at login,
+/// so it's there to notice calls.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recorder = DayRecorder()
     private let calls = CallWatcher()
+    private let shortcut = DoubleTapShortcut()
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !DevCommands.isRunning else { return }
         addMenuBarIcon()
+        openAtLogin()
         calls.start { [recorder] app in
             Task { await recorder.callChanged(to: app) }
         }
+        shortcut.start { [recorder] in
+            Task { await recorder.setOn(!recorder.isOn) }
+        }
         if CommandLine.arguments.contains(Self.resumeRecording) {
             Task { await recorder.setOn(true) }
+        }
+    }
+
+    /// Adds RMD to Login Items the first time it runs. Only once: if the user removes it in
+    /// System Settings → General → Login Items, it stays removed.
+    private func openAtLogin() {
+        let added = "addedToLoginItems"
+        if !UserDefaults.standard.bool(forKey: added) {
+            do {
+                try SMAppService.mainApp.register()
+                UserDefaults.standard.set(true, forKey: added)
+            } catch {
+                print("RMD: couldn't add RMD to Login Items: \(error)")
+            }
+        }
+        if ProcessInfo.processInfo.environment["RMD_DEBUG"] != nil {
+            FileHandle.standardError.write(Data("login item: \(SMAppService.mainApp.status)\n".utf8))
         }
     }
 
