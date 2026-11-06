@@ -18,24 +18,41 @@ struct AudioChunk: Sendable {
 /// is reported through `onStuck`; only a fresh copy of RMD gets the microphone back after that.
 @MainActor
 final class MicCapture {
-    struct NoMicrophone: Error {}
-    struct Stuck: Error {}
+    struct NoMicrophone: LocalizedError {
+        var errorDescription: String? { "No microphone found. Switch on to try again." }
+    }
+    struct Stuck: LocalizedError {
+        var errorDescription: String? { "The microphone is stuck in macOS." }
+    }
 
     nonisolated static let sampleRate = 16_000.0
 
     /// Called when the audio engine stops answering while the microphone restarts.
     var onStuck: (() -> Void)?
+    /// Called with true when the microphone hasn't come back after a change (RMD keeps trying), and with
+    /// false once it is back.
+    var onLost: ((Bool) -> Void)?
 
     private let engine = MicEngine()
     private var stopWatchingDevice: (() -> Void)?
     private var continuation: AsyncStream<AudioChunk>.Continuation?
     private var restarting: Task<Void, Never>?
+    private var lost = false
 
     func start() async throws -> AsyncStream<AudioChunk> {
         let (stream, continuation) = AsyncStream.makeStream(of: AudioChunk.self)
         self.continuation = continuation
         do {
-            try await startEngine()
+            // A call often starts while headphones are still connecting: give the microphone a few tries.
+            for attempt in 1...5 {
+                do {
+                    try await startEngine()
+                    break
+                } catch let error where !(error is Stuck) && attempt < 5 {
+                    try await Task.sleep(for: .seconds(1))
+                    guard self.continuation != nil else { throw CancellationError() }  // stopped meanwhile
+                }
+            }
         } catch {
             continuation.finish()
             self.continuation = nil
@@ -52,38 +69,50 @@ final class MicCapture {
         stopWatchingDevice = nil
         restarting?.cancel()
         restarting = nil
+        lost = false
         engine.stop()
         continuation?.finish()
         continuation = nil
     }
 
+    /// Reported once per change, whichever restart sees it: a device change that brings the microphone
+    /// back starts a new restart, which has to clear what an earlier one reported.
+    private func report(lost: Bool) {
+        guard lost != self.lost else { return }
+        self.lost = lost
+        onLost?(lost)
+    }
+
     /// A microphone that just connected can take a moment to be ready, so the new engine starts after a
-    /// short wait, with a few more tries if needed. Changes in quick succession lead to one restart.
+    /// short wait. If it doesn't start, RMD keeps trying for as long as it is on: every second at first,
+    /// then every 5 s, saying so through `onLost`. Changes in quick succession lead to one restart.
     private func restart() {
         guard continuation != nil else { return }
         restarting?.cancel()
         restarting = Task {
-            for _ in 1...5 {
-                try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { return }
+            var failures = 0
+            while true {
+                try? await Task.sleep(for: .seconds(failures < 5 ? 1 : 5))
+                guard !Task.isCancelled, continuation != nil else { return }
                 do {
                     try await startEngine()
+                    report(lost: false)
                     return
                 } catch is Stuck {
                     onStuck?()
                     return
                 } catch {
-                    print("RMD: the microphone isn't ready yet: \(error)")
+                    failures += 1
+                    if failures >= 5, !Task.isCancelled { report(lost: true) }
                 }
             }
-            print("RMD: the microphone didn't come back")
         }
     }
 
     private func startEngine() async throws {
         guard let continuation else { return }
         let engine = engine
-        try await engine.run {
+        try await engine.run { [weak self] in
             try engine.start(into: continuation) { [weak self] in
                 Task { @MainActor in self?.restart() }
             }
@@ -178,7 +207,9 @@ private final class ResumeOnce: Sendable {
 /// Converts device-format buffers to mono Float32 at a fixed rate.
 /// Not thread-safe: use one instance per stream, one buffer at a time.
 final class Resampler: @unchecked Sendable {
-    struct UnsupportedFormat: Error {}
+    struct UnsupportedFormat: LocalizedError {
+        var errorDescription: String? { "RMD can't read this audio device's format." }
+    }
 
     private let converter: AVAudioConverter
     private let target: AVAudioFormat

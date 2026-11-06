@@ -1,6 +1,6 @@
 # RMD — Record My Day
 
-A macOS menu bar app that, while switched on, listens to your **microphone** ("Me") and your **computer audio** ("Others") and keeps a **timestamped text transcript** of your day. Audio is transcribed on-device and never written to disk. Summaries (time blocks, meetings, daily) are generated locally, and an **MCP server** lets Claude or any MCP client query everything.
+A macOS menu bar app that, while switched on, listens to your **microphone** ("Me") and, during calls, your **computer audio** ("Others") and keeps a **timestamped text transcript** of your day. Audio is transcribed on-device and never written to disk. An **MCP server** lets Claude or any MCP client read the transcript and summarize it (a day, a time range, a meeting).
 
 ## Build & run
 
@@ -15,20 +15,29 @@ make clean
 
 `RMD.xcodeproj` is generated from `project.yml`; edit the YAML, not the project.
 
-RMD lives only in the menu bar: its icon opens the switch and Quit. The icon is green while recording, yellow
-when RMD needs you, and plain the rest of the time. Yellow means the microphone is off limits (Settings), RMD
-couldn't start, or the mic got stuck in macOS: after a mic change macOS's audio engine can stop answering, and
-only a fresh copy of RMD gets the mic back, so the menu offers **Restart RMD** (recording carries on after it).
-New menu bar icons normally land on the far
-left, which on a full menu bar is behind the notch, so RMD's starts near the right end, next to Control Center
-(⌘-drag it to move it). Opening RMD again from Spotlight opens the same menu, and `open rmd://on`,
-`open rmd://off` or `open rmd://toggle` switch recording from Terminal.
+RMD lives only in the menu bar: its icon opens the switch, one status line and Quit. The icon is a green disc
+while recording, a yellow disc when RMD needs you, and a plain outline the rest of the time. Yellow means one of:
+the microphone is off limits (the menu opens Settings), RMD couldn't start, part of what should be recorded
+isn't (the mic didn't come back after a change, or the other side of a call can't be heard; RMD keeps trying),
+or the mic got stuck in macOS. That last one happens after a mic change, when macOS's audio engine stops
+answering; only a fresh copy of RMD gets the mic back, so RMD restarts itself once (recording carries on), and
+if that doesn't help the menu offers **Restart RMD**. The menu says why RMD is on ("Recording this call: stops
+by itself when the call ends") and the icon's tooltip says the same in a few words.
 
-**Double-tap Fn (🌐)** in any app to switch recording on or off. Holding Fn, or Fn with another key, doesn't
-count. It needs Input Monitoring: macOS asks once, and the switch is in System Settings → Privacy & Security →
-Input Monitoring. RMD only watches modifier keys going up and down, never what you type. Wispr Flow uses Fn for
-push-to-talk, so if you run both, give one of them another key. Run with `RMD_DEBUG=1` to print where
-the icon is and whether it's visible. Finder's app icon is drawn by `swift tools/make-icon.swift`.
+New menu bar icons normally land on the far left, which on a full menu bar is behind the notch, so RMD's starts
+near the right end, next to Control Center (⌘-drag it to move it). Opening RMD again from Spotlight opens the
+same menu, and `open rmd://on`, `open rmd://off` or `open rmd://toggle` switch recording from Terminal. Only one
+copy runs at a time. Quit (or logging out) first saves the lines already heard, for up to 10 s.
+
+**Double-tap Fn (🌐)** in any app to switch recording on or off. Holding Fn doesn't count. Two quick presses of
+Fn with another key (Fn-Delete, Fn-arrows) do look like a double tap, because RMD never sees ordinary keys.
+It needs Input Monitoring: macOS asks once, and the switch is in System Settings → Privacy & Security → Input
+Monitoring (the menu links there until it's allowed). RMD only watches modifier keys going up and down, never
+what you type. Wispr Flow uses Fn for push-to-talk, so if you run both, give one of them another key.
+
+Run with `RMD_DEBUG=1` to print where the icon is and each state it shows. Problems are logged, never anything
+that was said: `log show --last 1h --predicate 'subsystem == "com.madhukarsharma.RMD"'`. Finder's app icon is
+drawn by `swift tools/make-icon.swift`.
 
 RMD adds itself to Login Items the first time it runs, so it's there to catch calls after a restart; it opens
 switched off. Remove it in System Settings → General → Login Items and it stays removed. The login item points
@@ -42,20 +51,30 @@ Transcripts live in `~/Library/Application Support/RMD/rmd.sqlite`.
 When a call app uses the microphone (Zoom, Teams, Slack, WhatsApp, FaceTime, Webex, Discord, or a browser
 for Google Meet), RMD records the call: your voice from the mic as "Me", and the other people from the Mac's
 audio as "Others", taken before it reaches the speaker or AirPods. If RMD was off, it switches on for the
-call and off again 10 s after it ends; switching it off during a call is respected until the call ends.
-macOS asks once to allow "System Audio Recording". Mic and speaker changes (AirPods connecting) are followed
-without stopping.
+call (one to three seconds after the app opens the mic: RMD looks every 2 s and confirms half a second later)
+and off again 10 s after it ends; switching it off
+during a call is respected until the call ends. RMD starts listening before the speech model has loaded, so
+the start of the first call after login isn't lost. Each line remembers its call app ("call in Zoom").
+macOS asks once to allow "System Audio Recording".
+
+Mic and speaker changes (AirPods connecting) are followed without stopping. A tap on the Mac's audio that was
+built while the speaker was still switching can come up silent, so RMD rebuilds one that delivers nothing for
+10 s while the speaker is running. "Others" is everything the Mac plays during the call, so a video or music
+playing at the same time ends up there too.
 
 On laptop speakers the mic also hears the other people, so their words reach the transcript twice: cleanly as
 "Others" and, a little garbled, as "Me". RMD removes that echo as it saves: a "Me" sentence is dropped when most
-of its words line up with what "Others" said within 2 s of it, so "Me" keeps only what you said, replies
-included. A sentence where you repeat the other person's words back can go with it; headphones avoid all of this.
+of its words line up with what "Others" said within 3 s of it, so "Me" keeps only what you said, replies
+included. A sentence where you repeat the other person's words back can go with it. On Bluetooth or wired
+headphones the mic can't hear the call, so nothing is removed.
 
 ### Names list
 
 `~/Library/Application Support/RMD/vocabulary.txt` holds names and words you say often (people, products,
-jargon), one per line. The speech model gets them as a hint, so it writes "Parul" rather than "Parool", and the
-MCP server hands them to Claude, so it can read "only" as Olly. Edits count from the next line RMD hears.
+jargon), one per line. The speech model gets them as a hint, so it writes "Meera" rather than "Mira", and the
+MCP server hands them to Claude, so it can read a similar-sounding word as the name it was. The speech model
+takes about the first 20 (the hint shares its room with the line being written); Claude sees them all. Edits
+count from the next line RMD hears.
 
 ### Testing without talking
 
@@ -118,9 +137,16 @@ The path points at the build folder, so run `make build` again after a `make cle
 | Tool | What it returns |
 |---|---|
 | `list_days` | Days with a transcript, line counts, first/last time |
-| `get_transcript` | One day (`date`: YYYY-MM-DD / today / yesterday), optionally `from`–`to` (HH:mm) |
+| `list_sessions` | One day's outline: each stretch of speech (split at 5 min of silence), whether it was a call and in which app, how much was said |
+| `get_transcript` | One day (`date`: YYYY-MM-DD / today / yesterday), optionally `from`–`to` (HH:mm or HH:mm:ss; a `to` before `from` means the next day) |
 | `search_transcript` | Lines matching words, with date and time |
 | `get_recent` | The last N minutes |
+
+A busy day is 250,000 characters or more, too much for one tool result, so `get_transcript` stops at about
+60,000 and says how to ask for the rest; `list_sessions` lets Claude go straight to "my 11am meeting" without
+reading the day. Lines from one side that follow each other within 3 s are shown as one paragraph. Search
+looks for every word first, then word beginnings ("meet" finds "meetings"), then any of the words, and says
+which it was. Hindi is spelled the speech model's way (nahin, achchha, thik hai), and the tools say so.
 
 Prompts (slash commands in clients that support them): `summarize_day`, `summarize_time_range`, `summarize_meeting`.
 
@@ -128,14 +154,14 @@ Prompts (slash commands in clients that support them): `summarize_day`, `summari
 
 ```
 mic ──────────► "Me"     ┐
-                         ├─► voice activity detection ─► local speech-to-text ─► SQLite (timestamped segments)
+                         ├─► voice activity detection ─► local speech-to-text ─► SQLite (timestamped lines)
 system audio ─► "Others" ┘        (skip silence)          (audio held in memory only)      │
-  (Core Audio process tap)                                                                  ├─► summarizer (Apple on-device LLM)
-                                                                                            │     30-min blocks · meetings · daily
-                                                                                            └─► rmd-mcp (stdio MCP server, read-only)
+  (Core Audio process tap,                                                                  └─► rmd-mcp (stdio MCP server, read-only)
+   during calls)                                                                                  └─► Claude reads and summarizes
 ```
 
-Each segment stores: start/end time, source (Me/Others), app (Zoom, Chrome…), text, language.
+Each line stores: start/end time, source (Me/Others), text, and the call app (Zoom, Chrome…) when it was
+heard during a call.
 
 ### Speech-to-text engine
 
@@ -153,8 +179,13 @@ on-device dictation in Indian English and 18% in Hindi, so Apple's engines are o
 
 Speech reaches the model in lines cut at pauses. With no pause for 25 s (often other people talking nearby),
 RMD cuts in the quietest moment of the last 15 s and carries the rest into the next line, so nothing is cut
-mid-word or lost. Whisper's repeat loops ("30 6. 30 6. 30 6…") are trimmed to one, and its "nan" for
-unreadable audio is dropped.
+mid-word or lost. A reply as short as 0.3 s ("Haan") is a line. When the audio stops and comes back (the Mac
+slept, a device changed), the line in progress ends there and the next one starts with its own time.
+
+On unclear audio Whisper loops: it writes the same words round and round, often changing them a little each
+time, at 10 to 20 words a second. RMD cuts those back to what was said once: exact repeats ("30 6. 30 6. 30 6…"),
+sentences repeated with small changes, and anything beyond what fits in the time at a normal pace. Lines that
+are only noise ("nan", rows of dots, "hhhhhh…", the names list read back) are dropped.
 
 **Re-creating the converted model** (1.5 GB, ~15 min on an M4, then ~4 min one-time Neural Engine setup on first load):
 
@@ -178,8 +209,9 @@ unreadable audio is dropped.
 - [x] 3. Calls: detected automatically, other side recorded from the Mac's audio (process tap) as "Others",
   mic and speaker changes followed, speaker echo removed from "Me". Still to do: computer audio outside calls
 - [x] 4. MCP server (`rmd-mcp`): transcript tools + summary prompts
-- [ ] 5. Meeting summaries (30-min, meeting, daily), Markdown export
-- [ ] 6. Polish — live transcript window, timeline (launch at login and the Fn shortcut are done)
+- [x] 5. Summaries by Claude through the MCP prompts (day, time range, meeting), with a day outline and paging
+- [x] 6. Polish: launch at login, the Fn shortcut, a status line that says what RMD is doing and why
+- [ ] 7. Limit "Others" to the call app, so a video playing during a call stays out (needs trying on live calls)
 
 ## Defaults
 

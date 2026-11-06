@@ -24,7 +24,7 @@ struct SpeechSegmenter {
     private let framesToEndLong = 10
     private let maxDuration: TimeInterval = 25  // Whisper reads 30 s windows
     private let minCutPoint: TimeInterval = 10  // at the limit, cut somewhere after this
-    private let minSpeech: TimeInterval = 0.4
+    private let minSpeech: TimeInterval = 0.3   // a quick "Haan" or "Ok" is about this long
 
     private var leftover: [Float] = []
     private var nextFrameTime = Date.distantPast
@@ -47,14 +47,23 @@ struct SpeechSegmenter {
     private var frameDuration: TimeInterval { Double(frameSize) / sampleRate }
 
     mutating func append(_ chunk: AudioChunk) -> [Utterance] {
+        var finished: [Utterance] = []
         let chunkStart = chunk.start.addingTimeInterval(-Double(leftover.count) / sampleRate)
-        if abs(chunkStart.timeIntervalSince(nextFrameTime)) > 1 {
-            // First chunk, or the stream jumped (device change, wake from sleep): re-anchor the clock.
+        let jump = chunkStart.timeIntervalSince(nextFrameTime)
+        if abs(jump) > 1 {
+            // First chunk, or the stream jumped (device change, wake from sleep). Nothing heard before the
+            // jump belongs with what comes after it: end the line in progress and forget the pre-roll.
+            if let cutOff = flush() { finished.append(cutOff) }
+            preRoll.removeAll()
+            leftover.removeAll()
+            nextFrameTime = chunk.start
+        } else if !inSpeech, abs(jump) > 0.1 {
+            // The device's clock drifts slowly against the wall clock: re-anchor between lines, so the
+            // drift never adds up to a "jump" that would end a sentence in the middle.
             nextFrameTime = chunkStart
         }
         leftover.append(contentsOf: chunk.samples)
 
-        var finished: [Utterance] = []
         var offset = 0
         while leftover.count - offset >= frameSize {
             let frame = leftover[offset..<offset + frameSize]
@@ -124,6 +133,10 @@ struct SpeechSegmenter {
     /// next utterance, so no audio is lost between them.
     private mutating func cutAtQuietestPoint() -> Utterance? {
         let window = 10
+        guard frames.count > window else {  // too short to look for a pause in
+            defer { reset() }
+            return finish()
+        }
         let first = min(Int(minCutPoint / frameDuration), frames.count - window)
         var best = frames.count - window
         var bestLevel = Float.infinity

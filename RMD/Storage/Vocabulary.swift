@@ -25,7 +25,7 @@ enum Vocabulary {
     static let template = """
         # Names and words you say often: people, places, products, jargon. One per line.
         # RMD's speech model listens for them, and Claude uses them to fix misheard words.
-        # Edits count from the next line RMD hears.
+        # The speech model takes about the first 20; Claude sees them all. Edits count from the next line RMD hears.
 
         """
 }

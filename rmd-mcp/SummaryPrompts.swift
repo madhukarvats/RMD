@@ -43,8 +43,9 @@ enum SummaryPrompts {
         switch params.name {
         case "summarize_day":
             request = """
-                Read my RMD transcript for \(day) with get_transcript (date: \(day)) and summarize my day:
-                1. Timeline: time blocks like "09:00–09:40 · …", merging lines that belong together and marking meetings and calls.
+                Summarize my day from my RMD transcript for \(day). Call list_sessions (date: \(day)) for the outline, then read \
+                each block with get_transcript (from, to). When a result says more follows, call again as it says before going on.
+                1. Timeline: time blocks like "09:00–09:40 · …", marking meetings and calls.
                 2. Decisions that were made.
                 3. Action items and commitments: what, who, and the time it was said.
                 4. Anything I said I would follow up on.
@@ -52,16 +53,17 @@ enum SummaryPrompts {
         case "summarize_time_range":
             let from = arguments["from"] ?? "", to = arguments["to"] ?? ""
             request = """
-                Read my RMD transcript for \(day) from \(from) to \(to) with get_transcript and summarize that period:
-                a short timeline in time blocks, decisions, and action items with the time each was said.
+                Read my RMD transcript for \(day) from \(from) to \(to) with get_transcript (when a result says more follows, \
+                call again as it says) and summarize that period: a short timeline in time blocks, decisions, and action \
+                items with the time each was said.
                 """
         case "summarize_meeting":
             let around = arguments["around"] ?? ""
             request = """
-                Find the meeting or call in my RMD transcript on \(day) around \(around): read get_transcript for about an hour \
-                either side of \(around), then pick out the stretch of back-and-forth conversation (calls usually include "Others" lines).
+                Find the meeting or call in my RMD transcript on \(day) around \(around): call list_sessions (date: \(day)), take \
+                the block that contains \(around) or is nearest to it, and read exactly that block with get_transcript.
                 Report its start and end time, topic, people mentioned, main discussion points, decisions, \
-                and action items with owner and the time each was said.
+                and action items with the time each was said.
                 """
         default:
             throw MCPError.invalidParams("Unknown prompt \(params.name)")
@@ -69,7 +71,9 @@ enum SummaryPrompts {
 
         let rules = """
 
-            Use only times that appear in the transcript. "Me" is me; "Others" is audio from my computer. \
+            Use only times that appear in the transcript. "Me" is what my microphone heard, mostly me; "Others" is the \
+            other side of a call, several people under one label. Say who said or owns something only when the transcript \
+            itself shows it; otherwise write "someone on the call". Skip lines that are clearly recognition glitches. \
             Write the summary in English; quote short Hinglish phrases as spoken when they matter.
             """
         return .init(description: params.name, messages: [.user(.text(text: request + rules))])

@@ -4,8 +4,9 @@ import SQLite3
 /// The day's transcript, one row per utterance, in a local SQLite file.
 /// WAL mode lets the MCP server read while the app writes.
 actor TranscriptStore {
-    struct SQLiteError: Error, CustomStringConvertible {
+    struct SQLiteError: LocalizedError, CustomStringConvertible {
         let description: String
+        var errorDescription: String? { "Transcript database: \(description)" }
     }
 
     struct Day: Sendable {
@@ -13,6 +14,21 @@ actor TranscriptStore {
         let lineCount: Int
         let first: Date
         let last: Date
+    }
+
+    /// A stretch of speech with no long silence in it: a call, a meeting, a spell of work.
+    struct Session: Sendable {
+        let first: Date
+        let last: Date
+        let mine: Int
+        let others: Int
+        let words: Int
+        let app: String?
+    }
+
+    /// How well search results match the query, best first.
+    enum Match: Sendable {
+        case allWords, wordStarts, someWords, phrase
     }
 
     private let db: OpaquePointer
@@ -34,6 +50,8 @@ actor TranscriptStore {
             sqlite3_close(handle)
             throw SQLiteError(description: message)
         }
+        // The app writes while the MCP server reads: wait out a short lock rather than fail.
+        sqlite3_busy_timeout(handle, 5000)
         db = handle
         if !readOnly {
             try Self.exec(db, Self.schema)
@@ -45,7 +63,7 @@ actor TranscriptStore {
     }
 
     func insert(_ line: TranscriptLine) throws -> TranscriptLine {
-        let sql = "INSERT INTO segments (started_at, ended_at, source, language, text) VALUES (?, ?, ?, ?, ?)"
+        let sql = "INSERT INTO segments (started_at, ended_at, source, language, text, app) VALUES (?, ?, ?, ?, ?, ?)"
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, line.start.timeIntervalSince1970)
@@ -57,6 +75,11 @@ actor TranscriptStore {
             sqlite3_bind_null(statement, 4)
         }
         sqlite3_bind_text(statement, 5, line.text, -1, sqliteTransient)
+        if let app = line.app {
+            sqlite3_bind_text(statement, 6, app, -1, sqliteTransient)
+        } else {
+            sqlite3_bind_null(statement, 6)
+        }
         guard sqlite3_step(statement) == SQLITE_DONE else { throw error() }
 
         var saved = line
@@ -74,8 +97,8 @@ actor TranscriptStore {
         defer { sqlite3_finalize(statement) }
         sqlite3_bind_double(statement, 1, from.timeIntervalSince1970)
         sqlite3_bind_double(statement, 2, to.timeIntervalSince1970)
-        sqlite3_bind_int(statement, 3, Int32(limit))
-        return readLines(statement)
+        sqlite3_bind_int(statement, 3, Int32(clamping: limit))
+        return try readLines(statement)
     }
 
     /// Lines from one source that overlap `[from, to]`, oldest first. No line is longer than about 25 s,
@@ -91,7 +114,7 @@ actor TranscriptStore {
         sqlite3_bind_double(statement, 2, from.timeIntervalSince1970 - 60)
         sqlite3_bind_double(statement, 3, to.timeIntervalSince1970)
         sqlite3_bind_double(statement, 4, from.timeIntervalSince1970)
-        return readLines(statement)
+        return try readLines(statement)
     }
 
     func setText(_ text: String, of id: Int64) throws {
@@ -109,39 +132,90 @@ actor TranscriptStore {
         guard sqlite3_step(statement) == SQLITE_DONE else { throw error() }
     }
 
-    /// Full-text search (every word must appear), falling back to a plain substring match
-    /// so partial words and odd spellings still hit. Newest first.
-    func search(_ query: String, since: Date, limit: Int) throws -> [TranscriptLine] {
+    /// Full-text search, newest first. It widens only when the step before finds nothing: every word as
+    /// written, then every word as the start of a word ("meet" finds "meetings"), then any of the words
+    /// (best matches first), then the query as one piece of text, so odd spellings still hit.
+    func search(_ query: String, since: Date, limit: Int) throws -> (lines: [TranscriptLine], match: Match) {
         let words = query.split(whereSeparator: \.isWhitespace)
             .map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
-        guard !words.isEmpty else { return [] }
+        guard !words.isEmpty else { return ([], .allWords) }
 
-        let fts = """
-            SELECT \(Self.columns(of: "s"))
-            FROM segments_fts JOIN segments s ON s.id = segments_fts.rowid
-            WHERE segments_fts MATCH ? AND s.started_at >= ? ORDER BY s.started_at DESC LIMIT ?
-            """
-        let ftsStatement = try prepare(fts)
-        defer { sqlite3_finalize(ftsStatement) }
-        sqlite3_bind_text(ftsStatement, 1, words.joined(separator: " "), -1, sqliteTransient)
-        sqlite3_bind_double(ftsStatement, 2, since.timeIntervalSince1970)
-        sqlite3_bind_int(ftsStatement, 3, Int32(limit))
-        let matches = readLines(ftsStatement)
-        if !matches.isEmpty { return matches }
+        var attempts: [(match: String, order: String, kind: Match)] = [
+            (words.joined(separator: " "), "s.started_at DESC", .allWords),
+            (words.map { $0 + "*" }.joined(separator: " "), "s.started_at DESC", .wordStarts),
+        ]
+        if words.count > 1 {
+            attempts.append((words.joined(separator: " OR "), "segments_fts.rank", .someWords))
+        }
+        for attempt in attempts {
+            let sql = """
+                SELECT \(Self.columns(of: "s"))
+                FROM segments_fts JOIN segments s ON s.id = segments_fts.rowid
+                WHERE segments_fts MATCH ? AND s.started_at >= ? ORDER BY \(attempt.order) LIMIT ?
+                """
+            let statement = try prepare(sql)
+            defer { sqlite3_finalize(statement) }
+            sqlite3_bind_text(statement, 1, attempt.match, -1, sqliteTransient)
+            sqlite3_bind_double(statement, 2, since.timeIntervalSince1970)
+            sqlite3_bind_int(statement, 3, Int32(clamping: limit))
+            // Some queries aren't valid full-text syntax; the plain text match below still handles them.
+            let matches = (try? readLines(statement)) ?? []
+            if !matches.isEmpty { return (matches, attempt.kind) }
+        }
 
         let like = """
             SELECT \(Self.columns()) FROM segments
             WHERE text LIKE ? ESCAPE '\\' AND started_at >= ? ORDER BY started_at DESC LIMIT ?
             """
-        let likeStatement = try prepare(like)
-        defer { sqlite3_finalize(likeStatement) }
+        let statement = try prepare(like)
+        defer { sqlite3_finalize(statement) }
         let escaped = query.replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "%", with: "\\%")
             .replacingOccurrences(of: "_", with: "\\_")
-        sqlite3_bind_text(likeStatement, 1, "%\(escaped)%", -1, sqliteTransient)
-        sqlite3_bind_double(likeStatement, 2, since.timeIntervalSince1970)
-        sqlite3_bind_int(likeStatement, 3, Int32(limit))
-        return readLines(likeStatement)
+        sqlite3_bind_text(statement, 1, "%\(escaped)%", -1, sqliteTransient)
+        sqlite3_bind_double(statement, 2, since.timeIntervalSince1970)
+        sqlite3_bind_int(statement, 3, Int32(clamping: limit))
+        return (try readLines(statement), .phrase)
+    }
+
+    /// Stretches of speech that began in `[from, to)`, split wherever nobody spoke for `gap` seconds.
+    /// A stretch that runs past `to` (a call over midnight) is listed once, whole.
+    func sessions(from: Date, to: Date, gap: TimeInterval) throws -> [Session] {
+        let sql = """
+            WITH ordered AS (
+                SELECT *, lag(ended_at) OVER (ORDER BY started_at) AS previous_end FROM segments
+                WHERE started_at >= ? - 43200 AND started_at < ? + 43200
+            ), numbered AS (
+                SELECT *, sum(previous_end IS NULL OR started_at - previous_end >= ?) OVER (ORDER BY started_at) AS session
+                FROM ordered
+            )
+            SELECT min(started_at), max(ended_at), sum(source = 'me'), sum(source = 'others'),
+                   sum(length(text) - length(replace(text, ' ', '')) + 1), max(app)
+            FROM numbered GROUP BY session HAVING min(started_at) >= ? AND min(started_at) < ? ORDER BY session
+            """
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+        sqlite3_bind_double(statement, 1, from.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 2, to.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 3, gap)
+        sqlite3_bind_double(statement, 4, from.timeIntervalSince1970)
+        sqlite3_bind_double(statement, 5, to.timeIntervalSince1970)
+
+        var sessions: [Session] = []
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
+            sessions.append(Session(
+                first: Date(timeIntervalSince1970: sqlite3_column_double(statement, 0)),
+                last: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)),
+                mine: Int(sqlite3_column_int(statement, 2)),
+                others: Int(sqlite3_column_int(statement, 3)),
+                words: Int(sqlite3_column_int(statement, 4)),
+                app: sqlite3_column_text(statement, 5).map { String(cString: $0) }
+            ))
+            result = sqlite3_step(statement)
+        }
+        guard result == SQLITE_DONE else { throw error() }
+        return sessions
     }
 
     /// Days that have any transcript, newest first (days follow this Mac's time zone).
@@ -152,10 +226,11 @@ actor TranscriptStore {
             """
         let statement = try prepare(sql)
         defer { sqlite3_finalize(statement) }
-        sqlite3_bind_int(statement, 1, Int32(limit))
+        sqlite3_bind_int(statement, 1, Int32(clamping: limit))
 
         var days: [Day] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
             let first = Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
             days.append(Day(
                 date: Calendar.current.startOfDay(for: first),
@@ -163,29 +238,37 @@ actor TranscriptStore {
                 first: first,
                 last: Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
             ))
+            result = sqlite3_step(statement)
         }
+        guard result == SQLITE_DONE else { throw error() }
         return days
     }
 
     /// Column order read by `readLines`.
     private static func columns(of table: String? = nil) -> String {
-        ["id", "started_at", "ended_at", "source", "language", "text"]
+        ["id", "started_at", "ended_at", "source", "language", "text", "app"]
             .map { column in table.map { "\($0).\(column)" } ?? column }
             .joined(separator: ", ")
     }
 
-    private func readLines(_ statement: OpaquePointer) -> [TranscriptLine] {
+    /// Throws when the read stops for any reason but the end of the rows, so a locked or damaged
+    /// database is never mistaken for "nothing was said".
+    private func readLines(_ statement: OpaquePointer) throws -> [TranscriptLine] {
         var lines: [TranscriptLine] = []
-        while sqlite3_step(statement) == SQLITE_ROW {
+        var result = sqlite3_step(statement)
+        while result == SQLITE_ROW {
             lines.append(TranscriptLine(
                 id: sqlite3_column_int64(statement, 0),
                 start: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)),
                 end: Date(timeIntervalSince1970: sqlite3_column_double(statement, 2)),
                 source: TranscriptLine.Source(rawValue: String(cString: sqlite3_column_text(statement, 3))) ?? .me,
                 text: String(cString: sqlite3_column_text(statement, 5)),
-                language: sqlite3_column_text(statement, 4).map { String(cString: $0) }
+                language: sqlite3_column_text(statement, 4).map { String(cString: $0) },
+                app: sqlite3_column_text(statement, 6).map { String(cString: $0) }
             ))
+            result = sqlite3_step(statement)
         }
+        guard result == SQLITE_DONE else { throw error() }
         return lines
     }
 

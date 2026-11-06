@@ -16,7 +16,7 @@ run: build
 # Plain test programs compiled with the app's own source files (no Xcode test target needed).
 test:
 	mkdir -p build/tests
-	swiftc -O -swift-version 6 RMD/Transcription/TranscriptCleanup.swift RMD/Transcription/EchoFilter.swift tests/cleanup/main.swift -o build/tests/cleanup
+	swiftc -O -swift-version 6 RMD/Transcription/TranscriptCleanup.swift RMD/Transcription/EchoFilter.swift RMD/Transcription/Words.swift RMD/Storage/TranscriptLine.swift tests/cleanup/main.swift -o build/tests/cleanup
 	swiftc -O -swift-version 6 RMD/Audio/SpeechSegmenter.swift RMD/Audio/MicCapture.swift RMD/Audio/AudioDevices.swift tests/segmenter/main.swift -o build/tests/segmenter
 	build/tests/cleanup
 	build/tests/segmenter

@@ -10,9 +10,11 @@ enum DevCommands {
 
     @MainActor static func runIfRequested() {
         let arguments = CommandLine.arguments
-        guard let flag = arguments.firstIndex(where: { $0 == "--transcribe" || $0 == "--compare" }),
-              flag + 1 < arguments.count
-        else { return }
+        guard let flag = arguments.firstIndex(where: { $0 == "--transcribe" || $0 == "--compare" }) else { return }
+        guard flag + 1 < arguments.count else {  // without this, a forgotten file would start the whole app
+            print("usage: RMD --transcribe|--compare <audio file>")
+            exit(64)
+        }
         isRunning = true
         NSApplication.shared.setActivationPolicy(.prohibited)
         let url = URL(filePath: arguments[flag + 1])
@@ -22,6 +24,7 @@ enum DevCommands {
                 try await transcribe(url, compare: compare)
             } catch {
                 print("error: \(error)")
+                exit(1)
             }
             exit(0)
         }

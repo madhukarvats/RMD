@@ -16,7 +16,8 @@
   },
   "tools": [
     { "name": "list_days", "description": "Days that have a transcript, with line counts and first/last times" },
-    { "name": "get_transcript", "description": "One day's transcript, optionally a from–to time window" },
+    { "name": "list_sessions", "description": "A day's outline: each stretch of speech, whether it was a call, and how much was said" },
+    { "name": "get_transcript", "description": "One day's transcript, optionally a from–to time window, in pages" },
     { "name": "search_transcript", "description": "Lines matching words or a phrase, with date and time" },
     { "name": "get_recent", "description": "Everything heard in the last N minutes" }
   ],

@@ -1,25 +1,31 @@
 import AppKit
 import Carbon.HIToolbox
+import Observation
 
 /// Double-tapping Fn (🌐), from any app, switches recording on or off. A tap is a quick press and release
-/// with no other modifier, so holding Fn or using it with another key doesn't count; two taps within
-/// 0.4 s make a double tap.
+/// with no other modifier key, so holding Fn or Fn-Control doesn't count; two taps within 0.4 s make a
+/// double tap. Known gap: RMD never sees ordinary keys, so two quick Fn-Delete or Fn-arrow presses in a
+/// row look like a double tap too.
 ///
 /// Seeing Fn in other apps needs Input Monitoring (System Settings → Privacy & Security). RMD only listens
 /// for modifier keys going up and down (Fn, ⌘, ⌥, ⌃, ⇧), never for typed keys. Until access is given,
 /// RMD checks again every few seconds, so the shortcut starts working as soon as it's switched on.
 @MainActor
+@Observable
 final class DoubleTapShortcut {
+    /// False until macOS lets RMD see the Fn key (Input Monitoring); the menu offers to open Settings.
+    private(set) var isListening = false
+
     private static let key = Int64(kVK_Function)
     private static let modifiers: CGEventFlags = [.maskSecondaryFn, .maskCommand, .maskAlternate, .maskControl, .maskShift]
     private static let longestTap: TimeInterval = 0.3
     private static let longestGap: TimeInterval = 0.4
 
-    private var tap: CFMachPort?
-    private var waitingForAccess: Task<Void, Never>?
-    private var pressedAt: Date?
-    private var lastTap = Date.distantPast
-    private var onDoubleTap: (() -> Void)?
+    @ObservationIgnored private var tap: CFMachPort?
+    @ObservationIgnored private var waitingForAccess: Task<Void, Never>?
+    @ObservationIgnored private var pressedAt: Date?
+    @ObservationIgnored private var lastTap = Date.distantPast
+    @ObservationIgnored private var onDoubleTap: (() -> Void)?
 
     func start(onDoubleTap: @escaping @MainActor () -> Void) {
         self.onDoubleTap = onDoubleTap
@@ -52,12 +58,18 @@ final class DoubleTapShortcut {
             callback: callback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
         ) else {
-            print("RMD: couldn't watch the Fn key")
+            Log.app.error("couldn't watch the Fn key")
             return
         }
         CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
         CGEvent.tapEnable(tap: tap, enable: true)
         self.tap = tap
+        isListening = true
+    }
+
+    /// Called when the menu opens: access taken away in System Settings shows up as the "Allow…" link again.
+    func recheckAccess() {
+        if tap != nil { isListening = CGPreflightListenEventAccess() }
     }
 
     private func handle(_ type: CGEventType, _ event: CGEvent) {

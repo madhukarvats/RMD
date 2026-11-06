@@ -3,10 +3,17 @@ import Foundation
 
 /// Small helpers over Core Audio's C API: device changes, the current speaker, and which apps use the mic.
 enum AudioDevices {
-    struct CoreAudioError: Error, CustomStringConvertible {
+    struct CoreAudioError: LocalizedError, CustomStringConvertible {
         let status: OSStatus
         let what: String
         var description: String { "couldn't \(what) (Core Audio error \(status))" }
+        var errorDescription: String? { "RMD \(description)." }
+    }
+
+    /// An app people make calls with. `name` is what the transcript shows ("call in Zoom").
+    struct CallApp: Sendable, Equatable {
+        let name: String
+        let bundleID: String
     }
 
     static func check(_ status: OSStatus, _ what: String) throws {
@@ -16,7 +23,8 @@ enum AudioDevices {
     static func read<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, into value: inout T) throws {
         var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var size = UInt32(MemoryLayout<T>.size)
-        try check(AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value), "read audio property \(selector)")
+        let status = withUnsafeMutablePointer(to: &value) { AudioObjectGetPropertyData(object, &address, 0, nil, &size, $0) }
+        try check(status, "read audio property \(selector)")
     }
 
     /// Runs `action` on the main thread whenever the default microphone
@@ -42,16 +50,30 @@ enum AudioDevices {
     }
 
     /// Apps people make calls with. When one of them is using the microphone, a call is on.
-    /// Browsers count too, for Google Meet and other calls in a web page.
-    static let callApps = [
-        "us.zoom.xos", "com.microsoft.teams", "com.tinyspeck.slackmacgap", "net.whatsapp.WhatsApp", "desktop.WhatsApp",
-        "com.apple.FaceTime", "com.cisco.webexmeetingsapp", "Cisco-Systems.Spark", "com.hnc.Discord",
-        "com.google.Chrome", "com.apple.Safari", "com.apple.WebKit", "company.thebrowser.Browser",
-        "com.microsoft.edgemac", "org.mozilla.firefox", "com.brave.Browser",
+    /// Browsers count too, for Google Meet and other calls in a web page. Helper processes share the prefix.
+    static let callApps: [CallApp] = [
+        CallApp(name: "Zoom", bundleID: "us.zoom.xos"),
+        CallApp(name: "Teams", bundleID: "com.microsoft.teams"),
+        CallApp(name: "Slack", bundleID: "com.tinyspeck.slackmacgap"),
+        CallApp(name: "WhatsApp", bundleID: "net.whatsapp.WhatsApp"),
+        CallApp(name: "WhatsApp", bundleID: "desktop.WhatsApp"),
+        CallApp(name: "FaceTime", bundleID: "com.apple.FaceTime"),
+        CallApp(name: "Webex", bundleID: "com.cisco.webexmeetingsapp"),
+        CallApp(name: "Webex", bundleID: "Cisco-Systems.Spark"),
+        CallApp(name: "Discord", bundleID: "com.hnc.Discord"),
+        CallApp(name: "Chrome", bundleID: "com.google.Chrome"),
+        CallApp(name: "Safari", bundleID: "com.apple.Safari"),
+        CallApp(name: "Safari", bundleID: "com.apple.WebKit"),
+        CallApp(name: "Arc", bundleID: "company.thebrowser.Browser"),
+        CallApp(name: "Edge", bundleID: "com.microsoft.edgemac"),
+        CallApp(name: "Firefox", bundleID: "org.mozilla.firefox"),
+        CallApp(name: "Brave", bundleID: "com.brave.Browser"),
     ]
 
-    /// The bundle ID of a call app that is using the microphone right now, if any.
-    static func callAppUsingMicrophone() -> String? {
+    /// The call app that is using the microphone right now, if any. Asks Core Audio about every audio
+    /// process (about 40 round trips), so it is called off the main thread.
+    static func callAppUsingMicrophone() -> CallApp? {
+        guard anyMicrophoneInUse() else { return nil }
         var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyProcessObjectList, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return nil }
@@ -65,8 +87,52 @@ enum AudioDevices {
                   (try? read(process, kAudioProcessPropertyBundleID, into: &bundle)) != nil,
                   let id = bundle?.takeRetainedValue() as String?
             else { continue }
-            if callApps.contains(where: id.hasPrefix) { return id }
+            if let app = callApps.first(where: { id.hasPrefix($0.bundleID) }) { return app }
         }
         return nil
+    }
+
+    /// False when no microphone on this Mac is in use by anyone: one cheap question that saves asking
+    /// every process, all day, while nothing is recording. True whenever it can't tell.
+    static func anyMicrophoneInUse() -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return true }
+        var devices = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &devices) == noErr else { return true }
+
+        for device in devices {
+            var inputs = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: kAudioObjectPropertyScopeInput, mElement: kAudioObjectPropertyElementMain)
+            var inputSize: UInt32 = 0
+            guard AudioObjectGetPropertyDataSize(device, &inputs, 0, nil, &inputSize) == noErr else { return true }
+            guard inputSize > 0 else { continue }  // a speaker
+            var running = UInt32(0)
+            guard (try? read(device, kAudioDevicePropertyDeviceIsRunningSomewhere, into: &running)) != nil else { return true }
+            if running != 0 { return true }
+        }
+        return false
+    }
+
+    /// True while any app has the current speaker running (playing, even silence). False when it can't tell.
+    static func speakerIsRunning() -> Bool {
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var running = UInt32(0)
+        guard (try? read(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice, into: &device)) != nil,
+              (try? read(device, kAudioDevicePropertyDeviceIsRunningSomewhere, into: &running)) != nil
+        else { return false }
+        return running != 0
+    }
+
+    /// False when the Mac plays through Bluetooth or wired headphones: the mic can't hear the call then,
+    /// so nothing "Me" says is echo. True whenever it can't tell. A Bluetooth speaker counts as headphones
+    /// too, and a call app set to its own speaker isn't seen: both only leave some echo in.
+    static func microphoneCanHearSpeaker() -> Bool {
+        var device = AudioObjectID(kAudioObjectUnknown)
+        var transport = UInt32(0)
+        guard (try? read(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultOutputDevice, into: &device)) != nil,
+              (try? read(device, kAudioDevicePropertyTransportType, into: &transport)) != nil
+        else { return true }
+        if transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE { return false }
+        return (try? defaultOutputUID()) != "BuiltInHeadphoneOutputDevice"
     }
 }

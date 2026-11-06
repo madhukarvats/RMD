@@ -13,18 +13,24 @@ actor WhisperKitTranscriber: Transcriber {
 
     private let whisper: WhisperKit
     private let language: String?
+    /// The names list as the tokens last sent to the model, so the file is only tokenized again after an edit.
+    private var prompt: (words: [String], tokens: [Int])?
+    /// False when the Hinglish model wasn't found and stock Whisper is in use, which writes Hindi in Devanagari.
+    nonisolated let writesRomanHindi: Bool
     private static let debug = ProcessInfo.processInfo.environment["RMD_DEBUG"] != nil
 
-    private init(whisper: WhisperKit, language: String?) {
+    private init(whisper: WhisperKit, language: String?, writesRomanHindi: Bool) {
         self.whisper = whisper
         self.language = language
+        self.writesRomanHindi = writesRomanHindi
     }
 
     static func load(progress: @escaping @Sendable (Double) -> Void) async throws -> WhisperKitTranscriber {
         let base = try TranscriptStore.defaultURL().deletingLastPathComponent().appending(path: "models")
         let folder: URL
         var language: String?
-        if let hinglish = hinglishModel(in: base) {
+        let hinglish = hinglishModel(in: base)
+        if let hinglish {
             folder = hinglish
             language = "en"  // Apex's model card: with "en" it writes Hindi as Roman Hinglish.
         } else {
@@ -46,7 +52,7 @@ actor WhisperKitTranscriber: Transcriber {
             load: true,
             download: false
         )
-        return WhisperKitTranscriber(whisper: try await WhisperKit(config), language: language)
+        return WhisperKitTranscriber(whisper: try await WhisperKit(config), language: language, writesRomanHindi: hinglish != nil)
     }
 
     private static func hinglishModel(in base: URL) -> URL? {
@@ -78,6 +84,8 @@ actor WhisperKitTranscriber: Transcriber {
             detectLanguage: language == nil,
             skipSpecialTokens: true,
             withoutTimestamps: true,
+            // WhisperKit skips audio shorter than this (1 s by default), which is every quick "Haan" or "Ok".
+            windowClipTime: 0,
             // WhisperKit-only check (not in OpenAI's Whisper). It aborts on a hesitant first
             // token, which is common for Hindi and Hinglish, and returns empty text.
             firstTokenLogProbThreshold: nil
@@ -85,34 +93,30 @@ actor WhisperKitTranscriber: Transcriber {
         // The user's names and jargon as Whisper's "previous text", which nudges it toward those spellings.
         let vocabulary = Vocabulary.load()
         if !vocabulary.isEmpty, let tokenizer = whisper.tokenizer {
-            options.promptTokens = Array(tokenizer.encode(text: " " + vocabulary.joined(separator: ", ") + ".")
-                .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
-                .prefix(Self.maxPromptTokens))
+            if prompt?.words != vocabulary {
+                let tokens = tokenizer.encode(text: " " + vocabulary.joined(separator: ", ") + ".")
+                    .filter { $0 < tokenizer.specialTokens.specialTokenBegin }
+                    .prefix(Self.maxPromptTokens)
+                prompt = (vocabulary, Array(tokens))
+            }
+            options.promptTokens = prompt?.tokens
             options.usePrefillPrompt = true
         }
         let results = try await whisper.transcribe(audioArray: samples, decodeOptions: options)
         if Self.debug {
             for segment in results.flatMap(\.segments) {
-                print(String(format: "  [%@] noSpeech %.2f, logprob %.2f, compression %.2f: %@",
-                             results.first?.language ?? "-", segment.noSpeechProb, segment.avgLogprob,
-                             segment.compressionRatio, segment.text))
+                print(String(format: "  [%@] logprob %.2f, compression %.2f: %@",
+                             results.first?.language ?? "-", segment.avgLogprob, segment.compressionRatio, segment.text))
             }
         }
-        let segments = results.flatMap(\.segments).filter { !Self.isSilence($0) }
-        let text = TranscriptCleanup.collapsingRepeats(segments.map(\.text).joined(separator: " "))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty,
-              !TranscriptCleanup.isKnownHallucination(text),
-              !TranscriptCleanup.isOnlyVocabulary(text, vocabulary)
-        else { return nil }
+        let written = results.flatMap(\.segments).map(\.text).joined(separator: " ")
+        let seconds = Double(samples.count) / MicCapture.sampleRate
+        guard let text = TranscriptCleanup.cleaned(written, seconds: seconds, vocabulary: vocabulary) else { return nil }
         // A forced language says nothing about what was actually spoken, so only keep detected ones.
         return Transcript(text: text, language: language == nil ? results.first?.language : nil)
     }
 
-    /// Whisper's prompt holds at most 224 tokens; a long list is cut rather than crowding out the speech.
-    private static let maxPromptTokens = 150
-
-    private static func isSilence(_ segment: TranscriptionSegment) -> Bool {
-        segment.noSpeechProb > 0.6 && segment.avgLogprob < -1
-    }
+    /// The names list shares Whisper's 224-token window with the line being written, and each of its tokens
+    /// is one more step for every line. 64 tokens is about 20 names; the top of the file comes first.
+    private static let maxPromptTokens = 64
 }

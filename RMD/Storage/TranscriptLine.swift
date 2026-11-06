@@ -12,4 +12,6 @@ struct TranscriptLine: Identifiable, Sendable, Equatable {
     let source: Source
     let text: String
     let language: String?
+    /// The call app ("Zoom", "Chrome"…) when the line was heard during a call.
+    var app: String? = nil
 }
